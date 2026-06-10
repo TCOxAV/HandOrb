@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Orb</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #07091a;
+            color: #fff;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Starfield */
+        #stars {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .star {
+            position: absolute;
+            border-radius: 50%;
+            background: #fff;
+            animation: twinkle var(--d) ease-in-out infinite alternate;
+        }
+        @keyframes twinkle {
+            from { opacity: var(--min); }
+            to   { opacity: var(--max); }
+        }
+
+        /* Galaxy explosion canvas — full screen */
+        #galaxyCanvas {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        /* ── UI PANEL ── */
+        .panel {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 100%;
+            height: 100%;
+            text-align: center;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 40px 20px;
+        }
+        .header-eyebrow {
+            font-size: 0.68rem;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: #5a7eff;
+            margin-bottom: 8px;
+        }
+        h1 {
+            font-size: 2.1rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fff 0%, #8ab4ff 60%, #5a7eff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1.1;
+            margin-bottom: 6px;
+        }
+        .subtitle {
+            color: #6070a0;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            margin-bottom: 18px;
+        }
+
+        #startButton {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            background: linear-gradient(135deg, #3f7bff, #6a4fff);
+            border: none;
+            color: #fff;
+            font-size: 0.9rem;
+            font-weight: 600;
+            padding: 0.75rem 1.6rem;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: transform .18s, box-shadow .18s, opacity .2s;
+            box-shadow: 0 4px 24px rgba(63,123,255,.35);
+        }
+        #startButton:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(63,123,255,.5); }
+        #startButton:disabled { opacity: .4; cursor: default; }
+
+        #status {
+            margin-top: 12px;
+            font-size: 0.76rem;
+            color: #5a70b0;
+            min-height: 16px;
+            transition: color .3s;
+            line-height: 1.4;
+        }
+        #status.live  { color: #4de88e; }
+        #status.error { color: #ff6b6b; }
+
+        /* Webcam */
+        #webcam-container {
+            margin: 16px auto 0;
+            width: min(400px, 80vw);
+            height: min(400px, 80vw);
+            border-radius: 20px;
+            overflow: hidden;
+            border: 1.5px solid rgba(90,126,255,.25);
+            transition: box-shadow .4s;
+            position: relative;
+        }
+        #webcam-container.active {
+            box-shadow: 0 0 30px rgba(63,123,255,.3), 0 0 60px rgba(63,123,255,.1);
+        }
+        #webcam-container canvas { width: 100% !important; height: 100% !important; display: block; }
+
+        /* Confidence bars */
+        #label-container {
+            margin-top: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+            text-align: left;
+        }
+        .pred-row { display: flex; flex-direction: column; gap: 3px; }
+        .pred-header { display: flex; justify-content: space-between; font-size: 0.7rem; color: #7b8fcf; }
+        .pred-header .pred-name { color: #a0b4e8; font-weight: 500; }
+        .pred-bar-bg { height: 4px; border-radius: 999px; background: rgba(255,255,255,.06); overflow: hidden; }
+        .pred-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg,#3f7bff,#7a5fff); width: 0%; transition: width .18s ease; }
+        .pred-bar-fill.top { background: linear-gradient(90deg,#4de88e,#2aafff); }
+
+        /* gesture hints */
+        .gesture-hints {
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .gh {
+            font-size: 0.68rem;
+            color: #3a4870;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .gh span { font-size: 1rem; }
+
+        /* ── ORB (free-floating, fixed position) ── */
+        #orb-wrapper {
+            position: fixed;
+            width: 140px;
+            height: 140px;
+            pointer-events: none;
+            z-index: 20;
+            /* centred by default, JS overrides left/top */
+            left: calc(50% + 120px);
+            top: 50%;
+            transform: translate(-50%, -50%);
+            transition: left .08s linear, top .08s linear;
+        }
+
+        .orb-ring {
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            border: 1px solid rgba(100,160,255,.15);
+            animation: ringPulse 3s ease-in-out infinite;
+            opacity: 0;
+            transition: opacity .4s;
+        }
+        .orb-ring:nth-child(2) { inset:-14px; animation-delay:.5s; border-color:rgba(100,160,255,.1);  }
+        .orb-ring:nth-child(3) { inset:-28px; animation-delay:1s;   border-color:rgba(100,160,255,.06); }
+        #orb-wrapper.show .orb-ring { opacity: 1; }
+        @keyframes ringPulse {
+            0%,100% { transform:scale(1);    opacity:.6; }
+            50%      { transform:scale(1.06); opacity:.15; }
+        }
+
+        #orb {
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            opacity: 0;
+            transform: scale(.3);
+            transition: opacity .35s cubic-bezier(.34,1.56,.64,1),
+                        transform .35s cubic-bezier(.34,1.56,.64,1);
+            background:
+                radial-gradient(circle at 32% 28%, rgba(255,255,255,.55) 0%, transparent 40%),
+                radial-gradient(circle at 68% 72%, rgba(40,100,255,.4) 0%, transparent 45%),
+                radial-gradient(ellipse at 50% 50%, #4a90ff 0%, #1a3ccc 55%, #0d1f8a 100%);
+            box-shadow:
+                inset -8px -8px 24px rgba(0,0,30,.55),
+                inset 6px 6px 18px rgba(200,230,255,.25),
+                0 0 40px rgba(60,120,255,.7),
+                0 0 80px rgba(60,120,255,.3);
+            animation: orbFloat 4s ease-in-out infinite;
+        }
+        #orb.show { opacity:1; transform:scale(1); }
+        @keyframes orbFloat {
+            0%,100% { top: 0; }
+            50%      { top: -8px; }
+        }
+
+        /* sparkle canvas inside orb */
+        #orbCanvas {
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity .35s;
+        }
+        #orb.show ~ #orbCanvas { opacity: 1; }
+
+        /* ── SKELETON ORB (Three.js canvas overlay) ── */
+        #skeletonCanvas {
+            position: absolute;
+            inset: -60px; /* bigger than wrapper for rings */
+            pointer-events: none;
+            border-radius: 50%;
+            opacity: 0;
+            transition: opacity .5s;
+        }
+        #orb-wrapper.skeleton #skeletonCanvas { opacity: 1; }
+        #orb-wrapper.skeleton #orb { opacity: 0 !important; }
+        #orb-wrapper.skeleton #orbCanvas { opacity: 0 !important; }
+        #orb-wrapper.skeleton .orb-ring { opacity: 0; }
+
+        /* orb label */
+        #orbLabel {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.72rem;
+            letter-spacing: .1em;
+            text-transform: uppercase;
+            color: #3a5090;
+            transition: color .3s;
+            z-index: 25;
+            pointer-events: none;
+        }
+        #orbLabel.open   { color: #5a9fff; }
+        #orbLabel.closed { color: #384070; }
+        #orbLabel.sphere { color: #d0a0ff; }
+    </style>
+</head>
+<body>
+
+<div id="stars"></div>
+<canvas id="galaxyCanvas"></canvas>
+
+<!-- ORB — free-floating -->
+<div id="orb-wrapper">
+    <div class="orb-ring"></div>
+    <div class="orb-ring"></div>
+    <div class="orb-ring"></div>
+    <div id="orb"></div>
+    <canvas id="orbCanvas" width="140" height="140"></canvas>
+    <canvas id="skeletonCanvas"></canvas>
+</div>
+<div id="orbLabel">Waiting…</div>
+
+<!-- UI PANEL -->
+<div class="panel">
+    <p class="header-eyebrow">Teachable Machine</p>
+    <h1>Hand Orb</h1>
+    <p class="subtitle">
+        ✋ Open palm → summon &amp; drag orb<br>
+        ✊ Closed fist → dismiss orb<br>
+        🌐 Both hands sphere → expand skeleton<br>
+        💥 Release → galaxy explosion
+    </p>
+    <button id="startButton">◎ Start Camera</button>
+    <div id="status">Add model files to <code>./my_model/</code> then click Start.</div>
+    <div id="webcam-container"></div>
+    <div id="label-container"></div>
+    <div class="gesture-hints">
+        <div class="gh"><span>✋</span> Open palm to drag the orb</div>
+        <div class="gh"><span>✊</span> Fist to dismiss</div>
+        <div class="gh"><span>🌐</span> Fingertips touching = skeleton sphere</div>
+    </div>
+</div>
+
+<!-- Libraries -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="scriptt.js"></script>
+
+<script>
+/* ══════════════════════════════════════════
+   STARS
+══════════════════════════════════════════ */
+(function(){
+    const el = document.getElementById('stars');
+    for (let i = 0; i < 130; i++) {
+        const s = document.createElement('div');
+        s.className = 'star';
+        const size = Math.random() * 1.8 + 0.3;
+        s.style.cssText = `
+            width:${size}px;height:${size}px;
+            top:${Math.random()*100}%;left:${Math.random()*100}%;
+            --d:${(Math.random()*3+2).toFixed(1)}s;
+            --min:${(Math.random()*0.08).toFixed(2)};
+            --max:${(Math.random()*0.5+0.1).toFixed(2)};
+            animation-delay:${(Math.random()*3).toFixed(1)}s;`;
+        el.appendChild(s);
+    }
+})();
+
+/* ══════════════════════════════════════════
+   ORB SPARKLE CANVAS
+══════════════════════════════════════════ */
+(function(){
+    const canvas = document.getElementById('orbCanvas');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height, R = W/2;
+    const pts = Array.from({length:28},()=>({
+        angle: Math.random()*Math.PI*2,
+        radius: Math.random()*(R-14)+5,
+        speed: (Math.random()*.008+.004)*(Math.random()<.5?1:-1),
+        size: Math.random()*2+.5,
+        alpha: Math.random()*.6+.3,
+        phase: Math.random()*Math.PI*2
+    }));
+    let t=0;
+    (function draw(){
+        ctx.clearRect(0,0,W,H);
+        t+=.025;
+        pts.forEach(p=>{
+            p.angle+=p.speed;
+            const x=R+Math.cos(p.angle)*p.radius;
+            const y=R+Math.sin(p.angle)*p.radius;
+            const a=p.alpha*(.5+.5*Math.sin(t+p.phase));
+            ctx.beginPath();
+            ctx.arc(x,y,p.size,0,Math.PI*2);
+            ctx.fillStyle=`rgba(180,220,255,${a})`;
+            ctx.fill();
+        });
+        requestAnimationFrame(draw);
+    })();
+})();
+</script>
+</body>
+</html>
