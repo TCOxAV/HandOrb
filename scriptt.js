@@ -14,15 +14,15 @@ let mpHands = null, mpCamera = null;
 let animationId = null;
 let predictionInFlight = false;
 let lastPredictionTime = 0;
-const PREDICTION_INTERVAL_MS = 140;
+const PREDICTION_INTERVAL_MS = 300; // TM prediction rate (3/sec is plenty)
 
 let orbVisible   = false;   // solid orb shown
 let orbSkeleton  = false;   // skeleton mode
 let exploding    = false;   // galaxy explosion in progress
 let sphereHoldStart = 0;    // when sphere gesture started
-const SPHERE_HOLD_MS = 600; // hold this long before activating
+const SPHERE_HOLD_MS = 350; // hold this long before activating
 
-/* orb position on screen (center of wrapper) */
+/* orb position on screen (transform-based — absolute screen coords) */
 let orbX = window.innerWidth/2 + 160;
 let orbY = window.innerHeight/2;
 let orbTargetX = orbX, orbTargetY = orbY;
@@ -30,6 +30,9 @@ let orbTargetX = orbX, orbTargetY = orbY;
 /* last palm position from MediaPipe (normalised 0-1) */
 let palmNX = null, palmNY = null; // null = no hand seen
 let sphereGestureActive = false;
+let sphereProgress = 0; // 0-1 charge-up progress
+let indexFingerActive = false; // true if exactly 1 finger is up
+let sphereCooldown = false; // prevents auto-explosion from looping until hand opens
 
 /* ── DOM refs ── */
 const statusEl   = document.getElementById("status");
@@ -73,8 +76,9 @@ window.addEventListener("resize", resizeGalaxyCanvas);
 (function positionLoop(){
     orbX += (orbTargetX - orbX) * 0.12;
     orbY += (orbTargetY - orbY) * 0.12;
-    orbWrapper.style.left = orbX + "px";
-    orbWrapper.style.top  = orbY + "px";
+    // transform is GPU-composited — no layout, no paint, silky smooth
+    orbWrapper.style.transform =
+        `translate(${orbX}px,${orbY}px) translate(-50%,-50%)`;
     requestAnimationFrame(positionLoop);
 })();
 
@@ -142,13 +146,46 @@ function animateSkeleton() {
         skSphere.rotation.y += 0.008;
         skSphere.rotation.x += 0.003;
 
-        // dynamic colour pulse
+            // dynamic colour pulse — reuse color object to avoid GC churn
         const t = Date.now() * 0.001;
         const h = (t * 0.1) % 1;
-        const col = new THREE.Color().setHSL(0.6 + h * 0.1, 0.9, 0.65);
-        skSphere.material.color = col;
+        if (!animateSkeleton._col) animateSkeleton._col = new THREE.Color();
+        animateSkeleton._col.setHSL(0.6 + h * 0.1, 0.9, 0.65);
+        skSphere.material.color = animateSkeleton._col;
     }
     skRenderer.render(skScene, skCamera);
+}
+
+/* ══════════════════════════════════════════
+   CHARGE RING — visual feedback while gesture builds
+   Draws a pulsing arc on the galaxy canvas showing hold progress
+══════════════════════════════════════════ */
+let chargeRingX = 0.5, chargeRingY = 0.5;
+function updateChargeRing(progress) {
+    if (progress <= 0.02) return;
+    const cx = chargeRingX * window.innerWidth;
+    const cy = chargeRingY * window.innerHeight;
+    const radius = 48 + progress * 22;
+    const alpha = 0.25 + progress * 0.65;
+
+    // draw a short-lived arc (doesn't persist — cleared each frame by galaxy or next call)
+    galaxyCtx.beginPath();
+    galaxyCtx.arc(cx, cy, radius, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+    galaxyCtx.strokeStyle = `hsla(${220 + progress * 60}, 100%, ${60 + progress * 30}%, ${alpha})`;
+    galaxyCtx.lineWidth = 3 + progress * 4;
+    galaxyCtx.lineCap = 'round';
+    galaxyCtx.stroke();
+
+    // inner glow dot
+    if (progress > 0.5) {
+        const grd = galaxyCtx.createRadialGradient(cx, cy, 0, cx, cy, 12);
+        grd.addColorStop(0, `hsla(200, 100%, 80%, ${(progress - 0.5) * 0.8})`);
+        grd.addColorStop(1, 'transparent');
+        galaxyCtx.beginPath();
+        galaxyCtx.arc(cx, cy, 12, 0, Math.PI * 2);
+        galaxyCtx.fillStyle = grd;
+        galaxyCtx.fill();
+    }
 }
 
 function showSkeleton() {
@@ -160,7 +197,7 @@ function showSkeleton() {
     orbWrapper.classList.add("skeleton");
     if (!skAnimId) animateSkeleton();
     orbLabel.textContent = "Sphere gesture — skeleton orb";
-    orbLabel.className = "orb-label sphere";
+    orbLabel.className = "sphere";
 }
 
 /* ══════════════════════════════════════════
@@ -281,7 +318,7 @@ function breakSkeleton() {
     // orb stays hidden after break
     hideOrb();
     orbLabel.textContent = "Skeleton shattered — galaxy born";
-    orbLabel.className = "orb-label";
+    orbLabel.className = "";
 }
 
 /* ══════════════════════════════════════════
@@ -302,54 +339,188 @@ function hideOrb() {
 }
 
 /* ══════════════════════════════════════════
+   HAND SKELETON OVERLAY
+   Draws a holographic hand skeleton on the full-screen playground canvas
+   so users can see exactly where their hand is in the play space.
+══════════════════════════════════════════ */
+
+// MediaPipe Hands landmark connections (21 keypoints)
+const HAND_CONNECTIONS = [
+    [0,1],[1,2],[2,3],[3,4],           // thumb
+    [0,5],[5,6],[6,7],[7,8],           // index
+    [0,9],[9,10],[10,11],[11,12],      // middle
+    [0,13],[13,14],[14,15],[15,16],    // ring
+    [0,17],[17,18],[18,19],[19,20],    // pinky
+    [5,9],[9,13],[13,17]               // palm knuckle bar
+];
+const FINGERTIP_IDX = new Set([4, 8, 12, 16, 20]);
+
+function drawHandSkeleton(multiLandmarks) {
+    if (!multiLandmarks || multiLandmarks.length === 0) return;
+
+    const W = galaxyCvs.width;
+    const H = galaxyCvs.height;
+
+    multiLandmarks.forEach(landmarks => {
+        // Map normalised MediaPipe coords → screen pixels
+        // MediaPipe x is mirrored: 0 = right edge, 1 = left edge
+        const sc = landmarks.map(lm => ({
+            x: (1 - lm.x) * W,
+            y: lm.y * H
+        }));
+
+        galaxyCtx.save();
+        galaxyCtx.lineCap = 'round';
+        galaxyCtx.lineJoin = 'round';
+
+        /* ── Pass 1: wide glow (no shadowBlur for perf) ── */
+        galaxyCtx.strokeStyle = 'rgba(60, 130, 255, 0.12)';
+        galaxyCtx.lineWidth = 8;
+        galaxyCtx.beginPath();
+        HAND_CONNECTIONS.forEach(([a, b]) => {
+            galaxyCtx.moveTo(sc[a].x, sc[a].y);
+            galaxyCtx.lineTo(sc[b].x, sc[b].y);
+        });
+        galaxyCtx.stroke();
+
+        /* ── Pass 2: crisp bone lines ── */
+        galaxyCtx.strokeStyle = 'rgba(80, 160, 255, 0.55)';
+        galaxyCtx.lineWidth = 1.6;
+        galaxyCtx.beginPath();
+        HAND_CONNECTIONS.forEach(([a, b]) => {
+            galaxyCtx.moveTo(sc[a].x, sc[a].y);
+            galaxyCtx.lineTo(sc[b].x, sc[b].y);
+        });
+        galaxyCtx.stroke();
+
+        /* ── Pass 3: joint dots ── */
+        sc.forEach((p, i) => {
+            const isTip = FINGERTIP_IDX.has(i);
+            const r = isTip ? 5.5 : (i === 0 ? 4 : 2.5);
+
+            // When charging pinch gesture, fingertips shift blue → amber/white
+            let fillColor, glowColor;
+            if (isTip && sphereProgress > 0.05) {
+                const hue  = 210 - sphereProgress * 150; // 210 blue → 60 amber
+                const sat  = 100;
+                const lit  = 55 + sphereProgress * 35;
+                const a    = 0.75 + sphereProgress * 0.25;
+                fillColor  = `hsla(${hue},${sat}%,${lit}%,${a})`;
+                glowColor  = `hsla(${hue},${sat}%,${lit}%,0.4)`;
+            } else if (isTip) {
+                fillColor = 'rgba(130, 195, 255, 0.88)';
+                glowColor = 'rgba(80, 160, 255, 0.3)';
+            } else {
+                fillColor = i === 0 ? 'rgba(100, 170, 255, 0.75)' : 'rgba(70, 130, 255, 0.6)';
+                glowColor = null;
+            }
+
+            // Soft outer glow ring for tips
+            if (glowColor) {
+                galaxyCtx.beginPath();
+                galaxyCtx.arc(p.x, p.y, r + 4, 0, Math.PI * 2);
+                galaxyCtx.fillStyle = glowColor;
+                galaxyCtx.fill();
+            }
+
+            // Main dot
+            galaxyCtx.beginPath();
+            galaxyCtx.arc(p.x, p.y, r, 0, Math.PI * 2);
+            galaxyCtx.fillStyle = fillColor;
+            galaxyCtx.fill();
+        });
+
+        galaxyCtx.restore();
+    });
+}
+
+/* ══════════════════════════════════════════
    MEDIAPIPE HANDS
 ══════════════════════════════════════════ */
+let mpFrameCounter = 0;
 function initMediaPipe(videoElement) {
     mpHands = new Hands({
         locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
     });
     mpHands.setOptions({
         maxNumHands: 2,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.6
+        modelComplexity: 0,          // lite model — much faster, still accurate
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.5
     });
     mpHands.onResults(onMPResults);
 
     mpCamera = new Camera(videoElement, {
-        onFrame: async () => { await mpHands.send({ image: videoElement }); },
-        width: 224,
-        height: 224
+        onFrame: async () => {
+            mpFrameCounter++;
+            if (mpFrameCounter % 2 !== 0) return; // process every 2nd frame (~15 fps)
+            await mpHands.send({ image: videoElement });
+        },
+        width: 160,   // hand detection doesn't need 224px
+        height: 160,
+        facingMode: 'user'
     });
     mpCamera.start();
 }
 
-/* Check if all fingertips on BOTH hands are close together (sphere gesture) */
+/* ─────────────────────────────────────────────────────────
+   detectSphereGesture — works with 1 OR 2 hands:
+
+   • Single hand : all 5 fingertips bunched within 0.11 norm-dist
+                   (think of closing all fingers into a gentle pinch)
+   • Two hands   : all 10 fingertips within 0.20 norm-dist
+                   (original "globe" gesture, threshold relaxed)
+
+   Returns { detected: bool, confidence: 0-1, cx, cy }
+───────────────────────────────────────────────────────── */
 function detectSphereGesture(multiLandmarks) {
-    if (!multiLandmarks || multiLandmarks.length < 2) return false;
+    const tips = [4, 8, 12, 16, 20]; // thumb, index, middle, ring, pinky
 
-    // fingertip landmark indices: thumb=4, index=8, middle=12, ring=16, pinky=20
-    const tips = [4, 8, 12, 16, 20];
+    if (!multiLandmarks || multiLandmarks.length === 0)
+        return { detected: false, confidence: 0, cx: 0.5, cy: 0.5 };
 
-    // collect all fingertips from both hands
-    const allTips = [];
-    multiLandmarks.forEach(hand => {
-        tips.forEach(i => allTips.push(hand[i]));
-    });
+    /* ── single-hand pinch-all ── */
+    for (const hand of multiLandmarks) {
+        const pts = tips.map(i => hand[i]);
+        const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+        const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+        const maxDist = Math.max(...pts.map(p =>
+            Math.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2)
+        ));
+        const THRESHOLD_1 = 0.11;
+        if (maxDist < THRESHOLD_1) {
+            const confidence = Math.max(0, 1 - maxDist / THRESHOLD_1);
+            return { detected: true, confidence, cx: 1 - cx, cy };
+        }
+        // partial progress for single hand (for charge ring)
+        if (maxDist < THRESHOLD_1 * 2.2) {
+            const confidence = Math.max(0, 1 - maxDist / (THRESHOLD_1 * 2.2));
+            // return partial but not detected
+            return { detected: false, confidence, cx: 1 - cx, cy };
+        }
+    }
 
-    if (allTips.length < 10) return false;
+    /* ── two-hand globe (original, threshold relaxed 0.15→0.20) ── */
+    if (multiLandmarks.length >= 2) {
+        const allTips = [];
+        multiLandmarks.forEach(hand => tips.forEach(i => allTips.push(hand[i])));
+        const cx = allTips.reduce((s, p) => s + p.x, 0) / allTips.length;
+        const cy = allTips.reduce((s, p) => s + p.y, 0) / allTips.length;
+        const maxDist = Math.max(...allTips.map(p =>
+            Math.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2)
+        ));
+        const THRESHOLD_2 = 0.20;
+        if (maxDist < THRESHOLD_2) {
+            const confidence = Math.max(0, 1 - maxDist / THRESHOLD_2);
+            return { detected: true, confidence, cx: 1 - cx, cy };
+        }
+        if (maxDist < THRESHOLD_2 * 1.8) {
+            const confidence = Math.max(0, 1 - maxDist / (THRESHOLD_2 * 1.8));
+            return { detected: false, confidence, cx: 1 - cx, cy };
+        }
+    }
 
-    // compute centroid
-    const cx = allTips.reduce((s, p) => s + p.x, 0) / allTips.length;
-    const cy = allTips.reduce((s, p) => s + p.y, 0) / allTips.length;
-
-    // check all tips within radius threshold
-    const maxDist = Math.max(...allTips.map(p =>
-        Math.sqrt((p.x - cx)**2 + (p.y - cy)**2)
-    ));
-
-    // threshold: all tips within ~15% of frame width of centroid
-    return maxDist < 0.15;
+    return { detected: false, confidence: 0, cx: 0.5, cy: 0.5 };
 }
 
 /* Get palm center from first hand (for dragging) */
@@ -374,6 +545,23 @@ function isFist(landmarks) {
     return avgDist < 0.15; // all fingers curled
 }
 
+/* Detect if only the index finger is up */
+function isIndexFingerUp(landmarks) {
+    const wrist = landmarks[0];
+    const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+    
+    const indexDist = dist(wrist, landmarks[8]);
+    const middleDist = dist(wrist, landmarks[12]);
+    const ringDist = dist(wrist, landmarks[16]);
+    const pinkyDist = dist(wrist, landmarks[20]);
+    
+    const maxOther = Math.max(middleDist, ringDist, pinkyDist);
+    
+    // Index must be significantly more extended than the other three
+    // and pointing generally upwards (tip y is less than wrist y)
+    return indexDist > maxOther * 1.4 && indexDist > 0.15 && landmarks[8].y < wrist.y;
+}
+
 function onMPResults(results) {
     const hands = results.multiHandLandmarks;
 
@@ -382,39 +570,82 @@ function onMPResults(results) {
         palmNY = null;
         sphereGestureActive = false;
         sphereHoldStart = 0;
+        sphereProgress = 0;
+        indexFingerActive = false;
+        if (!exploding) galaxyCtx.clearRect(0, 0, galaxyCvs.width, galaxyCvs.height);
         return;
     }
 
-    /* sphere gesture (2 hands, fingertips forming globe) */
-    const isSphere = detectSphereGesture(hands);
+    // clear + draw hand skeleton on playground (always, unless exploding)
+    if (!exploding) {
+        galaxyCtx.clearRect(0, 0, galaxyCvs.width, galaxyCvs.height);
+        drawHandSkeleton(hands);
+    }
 
-    if (isSphere) {
-        if (sphereHoldStart === 0) sphereHoldStart = Date.now();
-        if (!orbSkeleton && Date.now() - sphereHoldStart > SPHERE_HOLD_MS) {
-            // position orb at centroid of all fingertips
-            const tips = [4,8,12,16,20];
-            let ax=0, ay=0, n=0;
-            hands.forEach(h => { tips.forEach(i => { ax += h[i].x; ay += h[i].y; n++; }); });
-            const cx = (1 - ax/n) * window.innerWidth;
-            const cy = (ay/n) * window.innerHeight;
-            orbTargetX = cx;
-            orbTargetY = cy;
-            showSkeleton();
+    /* sphere gesture — single OR dual hand */
+    const sphereResult = detectSphereGesture(hands);
+    chargeRingX = sphereResult.cx;
+    chargeRingY = sphereResult.cy;
+    
+    // Only update progress/rings if not in cooldown from an auto-explosion
+    if (!sphereCooldown) {
+        sphereProgress = sphereResult.confidence;
+        updateChargeRing(sphereProgress);
+    }
+
+    if (sphereResult.detected) {
+        if (!sphereCooldown) {
+            if (sphereHoldStart === 0) sphereHoldStart = Date.now();
+            const elapsed = Date.now() - sphereHoldStart;
+            sphereProgress = Math.min(1, elapsed / SPHERE_HOLD_MS);
+            updateChargeRing(sphereProgress);
+
+            if (!orbSkeleton && elapsed > SPHERE_HOLD_MS) {
+                // place orb at the gesture centroid
+                orbTargetX = sphereResult.cx * window.innerWidth;
+                orbTargetY = sphereResult.cy * window.innerHeight;
+                showSkeleton();
+            }
+            sphereGestureActive = true;
+            
+            // Automatic explosion if held long enough (800ms after skeleton appears)
+            if (orbSkeleton && elapsed > SPHERE_HOLD_MS + 800) {
+                breakSkeleton();
+                sphereCooldown = true; // wait for user to release pinch
+                sphereGestureActive = false;
+                sphereHoldStart = 0;
+            }
         }
-        sphereGestureActive = true;
     } else {
+        // user released the pinch
+        sphereCooldown = false;
         if (sphereGestureActive && orbSkeleton) {
-            breakSkeleton();
+            breakSkeleton(); // explode on early release
         }
         sphereGestureActive = false;
         sphereHoldStart = 0;
+        if (!sphereResult.confidence) sphereProgress = 0;
     }
 
-    /* palm tracking for drag (use first hand if not in skeleton mode) */
-    if (!orbSkeleton && hands.length >= 1) {
-        const palm = getPalmCenter(hands[0]);
-        palmNX = palm.x;
-        palmNY = palm.y;
+    /* palm tracking for drag OR index finger tracking */
+    if (!orbSkeleton && !exploding && hands.length >= 1) {
+        indexFingerActive = isIndexFingerUp(hands[0]);
+        if (indexFingerActive) {
+            if (!orbVisible) {
+                showOrb();
+                orbLabel.textContent = "Summoned (1 finger)";
+                orbLabel.className = "open";
+            }
+            // map index tip directly to screen
+            orbTargetX = (1 - hands[0][8].x) * window.innerWidth;
+            orbTargetY = hands[0][8].y * window.innerHeight;
+        } else {
+            const palm = getPalmCenter(hands[0]);
+            palmNX = palm.x;
+            palmNY = palm.y;
+        }
+    } else {
+        indexFingerActive = false;
     }
 }
 
@@ -473,7 +704,7 @@ async function init() {
 
     /* ── webcam via TM ── */
     try {
-        webcam = new tmImage.Webcam(160, 160, true);
+        webcam = new tmImage.Webcam(224, 224, true);
         await webcam.setup();
         await webcam.play();
         webcamCont.appendChild(webcam.canvas);
@@ -526,21 +757,11 @@ async function loop() {
         return;
     }
 
-    try {
-        webcam.update();
-    } catch (err) {
-        setStatus("Webcam update error: " + (err.message || err), "error");
-        console.error(err);
-        stopCamera();
-        const btn = document.getElementById("startButton");
-        btn.disabled = false;
-        btn.textContent = "◎ Retry";
-        return;
-    }
-
+    // throttle webcam canvas update to TM prediction rate — no need to draw 60fps
     if (tmModel && !predictionInFlight) {
         const now = performance.now();
         if (now - lastPredictionTime >= PREDICTION_INTERVAL_MS) {
+            webcam.update(); // draw fresh frame only when we're about to predict
             predictionInFlight = true;
             lastPredictionTime = now;
             predict().finally(() => { predictionInFlight = false; });
@@ -559,7 +780,7 @@ async function predict() {
         const THRESH = 0.60;
         const cn = best.className.toLowerCase().trim();
 
-        if (!orbSkeleton && !exploding) {
+        if (!orbSkeleton && !exploding && !indexFingerActive) {
             if (cn.includes("open") && best.probability > THRESH) {
                 showOrb();
                 if (palmNX !== null && palmNY !== null) {
@@ -568,14 +789,14 @@ async function predict() {
                     orbTargetY = margin + palmNY * (window.innerHeight - margin*2);
                 }
                 orbLabel.textContent = "Palm open — orb follows your hand";
-                orbLabel.className = "orb-label open";
+                orbLabel.className = "open";
             } else if (cn.includes("closed") && best.probability > THRESH) {
                 hideOrb();
                 orbLabel.textContent = "Hand closed — orb hidden";
-                orbLabel.className = "orb-label closed";
+                orbLabel.className = "closed";
             } else {
                 orbLabel.textContent = "Idle…";
-                orbLabel.className = "orb-label";
+                orbLabel.className = "";
             }
         }
 

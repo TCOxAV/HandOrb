@@ -4,187 +4,210 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hand Orb</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            font-family: 'Segoe UI', Arial, sans-serif;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
             background: #07091a;
             color: #fff;
             width: 100vw;
             height: 100vh;
             overflow: hidden;
+        }
+
+        /* ── Starfield Canvas ── */
+        #starsCanvas { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+
+        /* ── Galaxy explosion canvas ── */
+        #galaxyCanvas { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+
+        /* ══════════════════════════════════════════
+           TOP BAR
+        ══════════════════════════════════════════ */
+        .top-bar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 40;
+            padding: 14px 24px;
             display: flex;
             align-items: center;
-            justify-content: center;
+            justify-content: space-between;
+            gap: 16px;
+            background: linear-gradient(180deg, rgba(7,9,26,0.92) 0%, rgba(7,9,26,0) 100%);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
         }
 
-        /* Starfield */
-        #stars {
-            position: fixed;
-            inset: 0;
-            pointer-events: none;
-            z-index: 0;
-        }
-        .star {
-            position: absolute;
-            border-radius: 50%;
-            background: #fff;
-            animation: twinkle var(--d) ease-in-out infinite alternate;
-        }
-        @keyframes twinkle {
-            from { opacity: var(--min); }
-            to   { opacity: var(--max); }
-        }
-
-        /* Galaxy explosion canvas — full screen */
-        #galaxyCanvas {
-            position: fixed;
-            inset: 0;
-            pointer-events: none;
-            z-index: 5;
-        }
-
-        /* ── UI PANEL ── */
-        .panel {
-            position: relative;
-            z-index: 10;
-            width: 100%;
-            max-width: 100%;
-            height: 100%;
-            text-align: center;
-            flex-shrink: 0;
+        .top-bar-brand {
             display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            padding: 40px 20px;
+            align-items: baseline;
+            gap: 10px;
         }
+
         .header-eyebrow {
-            font-size: 0.68rem;
-            letter-spacing: 0.18em;
+            font-size: 0.62rem;
+            letter-spacing: 0.2em;
             text-transform: uppercase;
-            color: #5a7eff;
-            margin-bottom: 8px;
+            color: #4a68d8;
+            font-weight: 500;
         }
+
         h1 {
-            font-size: 2.1rem;
+            font-size: 1.35rem;
             font-weight: 700;
-            background: linear-gradient(135deg, #fff 0%, #8ab4ff 60%, #5a7eff 100%);
+            background: linear-gradient(135deg, #fff 0%, #8ab4ff 55%, #5a7eff 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            line-height: 1.1;
-            margin-bottom: 6px;
-        }
-        .subtitle {
-            color: #6070a0;
-            font-size: 0.8rem;
-            line-height: 1.5;
-            margin-bottom: 18px;
+            line-height: 1;
         }
 
-        #startButton {
-            display: inline-flex;
+        .top-bar-right {
+            display: flex;
             align-items: center;
-            gap: 7px;
-            background: linear-gradient(135deg, #3f7bff, #6a4fff);
-            border: none;
-            color: #fff;
-            font-size: 0.9rem;
-            font-weight: 600;
-            padding: 0.75rem 1.6rem;
-            border-radius: 999px;
-            cursor: pointer;
-            transition: transform .18s, box-shadow .18s, opacity .2s;
-            box-shadow: 0 4px 24px rgba(63,123,255,.35);
+            gap: 14px;
         }
-        #startButton:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(63,123,255,.5); }
-        #startButton:disabled { opacity: .4; cursor: default; }
+
+        /* Gesture pill hints in top bar */
+        .gesture-pills {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .gpill {
+            font-size: 0.65rem;
+            color: #3a4870;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.07);
+            border-radius: 999px;
+            padding: 3px 9px;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
 
         #status {
-            margin-top: 12px;
-            font-size: 0.76rem;
+            font-size: 0.72rem;
             color: #5a70b0;
-            min-height: 16px;
             transition: color .3s;
-            line-height: 1.4;
+            white-space: nowrap;
         }
         #status.live  { color: #4de88e; }
         #status.error { color: #ff6b6b; }
 
-        /* Webcam */
+        #startButton {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: linear-gradient(135deg, #3f7bff, #6a4fff);
+            border: none;
+            color: #fff;
+            font-family: inherit;
+            font-size: 0.82rem;
+            font-weight: 600;
+            padding: 0.55rem 1.3rem;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: transform .18s, box-shadow .18s, opacity .2s;
+            box-shadow: 0 4px 20px rgba(63,123,255,.35);
+            white-space: nowrap;
+        }
+        #startButton:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 28px rgba(63,123,255,.5); }
+        #startButton:disabled { opacity: .35; cursor: default; }
+
+        /* ══════════════════════════════════════════
+           BOTTOM-LEFT PiP PANEL
+        ══════════════════════════════════════════ */
+        .pip-panel {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            z-index: 40;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: flex-start;
+        }
+
+        .pip-label {
+            font-size: 0.6rem;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: #3a4870;
+            padding-left: 2px;
+        }
+
         #webcam-container {
-            margin: 16px auto 0;
-            width: min(400px, 80vw);
-            height: min(400px, 80vw);
-            border-radius: 20px;
+            width: 160px;
+            height: 160px;
+            border-radius: 14px;
             overflow: hidden;
-            border: 1.5px solid rgba(90,126,255,.25);
-            transition: box-shadow .4s;
+            border: 1.5px solid rgba(90,126,255,.28);
             position: relative;
+            background: rgba(10,15,40,0.6);
+            flex-shrink: 0;
         }
         #webcam-container.active {
-            box-shadow: 0 0 30px rgba(63,123,255,.3), 0 0 60px rgba(63,123,255,.1);
+            box-shadow: 0 0 20px rgba(63,123,255,.25), 0 4px 24px rgba(0,0,0,0.5);
         }
         #webcam-container canvas { width: 100% !important; height: 100% !important; display: block; }
 
-        /* Confidence bars */
+        /* Compact confidence bars */
         #label-container {
-            margin-top: 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 7px;
-            text-align: left;
-        }
-        .pred-row { display: flex; flex-direction: column; gap: 3px; }
-        .pred-header { display: flex; justify-content: space-between; font-size: 0.7rem; color: #7b8fcf; }
-        .pred-header .pred-name { color: #a0b4e8; font-weight: 500; }
-        .pred-bar-bg { height: 4px; border-radius: 999px; background: rgba(255,255,255,.06); overflow: hidden; }
-        .pred-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg,#3f7bff,#7a5fff); width: 0%; transition: width .18s ease; }
-        .pred-bar-fill.top { background: linear-gradient(90deg,#4de88e,#2aafff); }
-
-        /* gesture hints */
-        .gesture-hints {
-            margin-top: 14px;
+            width: 160px;
             display: flex;
             flex-direction: column;
             gap: 5px;
         }
+        .pred-row { display: flex; flex-direction: column; gap: 2px; }
+        .pred-header { display: flex; justify-content: space-between; font-size: 0.63rem; color: #4a5a8a; }
+        .pred-header .pred-name { color: #7a94cc; font-weight: 500; }
+        .pred-bar-bg { height: 3px; border-radius: 999px; background: rgba(255,255,255,.05); overflow: hidden; }
+        .pred-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg,#3f7bff,#7a5fff); width: 0%; transition: width .2s ease; }
+        .pred-bar-fill.top { background: linear-gradient(90deg,#4de88e,#2aafff); }
+
+        /* Gesture hints below bars */
+        .gesture-hints {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            margin-top: 2px;
+        }
         .gh {
-            font-size: 0.68rem;
-            color: #3a4870;
+            font-size: 0.62rem;
+            color: #2d3860;
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
         }
-        .gh span { font-size: 1rem; }
+        .gh span { font-size: 0.85rem; }
 
-        /* ── ORB (free-floating, fixed position) ── */
+        /* ══════════════════════════════════════════
+           ORB — free-floating, GPU-composited
+        ══════════════════════════════════════════ */
         #orb-wrapper {
             position: fixed;
             width: 140px;
             height: 140px;
             pointer-events: none;
             z-index: 20;
-            /* centred by default, JS overrides left/top */
-            left: calc(50% + 120px);
-            top: 50%;
-            transform: translate(-50%, -50%);
-            transition: left .08s linear, top .08s linear;
+            left: 0; top: 0;
+            transform: translate(calc(50vw + 120px), 50vh) translate(-50%, -50%);
+            will-change: transform;
         }
 
         .orb-ring {
-            position: absolute;
-            inset: 0;
-            border-radius: 50%;
+            position: absolute; inset: 0; border-radius: 50%;
             border: 1px solid rgba(100,160,255,.15);
             animation: ringPulse 3s ease-in-out infinite;
-            opacity: 0;
-            transition: opacity .4s;
+            opacity: 0; transition: opacity .4s;
         }
-        .orb-ring:nth-child(2) { inset:-14px; animation-delay:.5s; border-color:rgba(100,160,255,.1);  }
-        .orb-ring:nth-child(3) { inset:-28px; animation-delay:1s;   border-color:rgba(100,160,255,.06); }
+        .orb-ring:nth-child(2) { inset:-14px; animation-delay:.5s; border-color:rgba(100,160,255,.1); }
+        .orb-ring:nth-child(3) { inset:-28px; animation-delay:1s;  border-color:rgba(100,160,255,.06); }
         #orb-wrapper.show .orb-ring { opacity: 1; }
         @keyframes ringPulse {
             0%,100% { transform:scale(1);    opacity:.6; }
@@ -192,11 +215,8 @@
         }
 
         #orb {
-            position: absolute;
-            inset: 0;
-            border-radius: 50%;
-            opacity: 0;
-            transform: scale(.3);
+            position: absolute; inset: 0; border-radius: 50%;
+            opacity: 0; transform: scale(.3);
             transition: opacity .35s cubic-bezier(.34,1.56,.64,1),
                         transform .35s cubic-bezier(.34,1.56,.64,1);
             background:
@@ -216,44 +236,31 @@
             50%      { top: -8px; }
         }
 
-        /* sparkle canvas inside orb */
         #orbCanvas {
-            position: absolute;
-            inset: 0;
-            border-radius: 50%;
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity .35s;
+            position: absolute; inset: 0; border-radius: 50%;
+            pointer-events: none; opacity: 0; transition: opacity .35s;
         }
         #orb.show ~ #orbCanvas { opacity: 1; }
 
-        /* ── SKELETON ORB (Three.js canvas overlay) ── */
         #skeletonCanvas {
-            position: absolute;
-            inset: -60px; /* bigger than wrapper for rings */
-            pointer-events: none;
-            border-radius: 50%;
-            opacity: 0;
-            transition: opacity .5s;
+            position: absolute; inset: -60px;
+            pointer-events: none; border-radius: 50%;
+            opacity: 0; transition: opacity .5s;
         }
         #orb-wrapper.skeleton #skeletonCanvas { opacity: 1; }
-        #orb-wrapper.skeleton #orb { opacity: 0 !important; }
-        #orb-wrapper.skeleton #orbCanvas { opacity: 0 !important; }
-        #orb-wrapper.skeleton .orb-ring { opacity: 0; }
+        #orb-wrapper.skeleton #orb          { opacity: 0 !important; }
+        #orb-wrapper.skeleton #orbCanvas    { opacity: 0 !important; }
+        #orb-wrapper.skeleton .orb-ring     { opacity: 0; }
 
-        /* orb label */
+        /* Orb label */
         #orbLabel {
             position: fixed;
-            bottom: 24px;
-            left: 50%;
+            bottom: 24px; left: 50%;
             transform: translateX(-50%);
-            font-size: 0.72rem;
-            letter-spacing: .1em;
-            text-transform: uppercase;
-            color: #3a5090;
-            transition: color .3s;
-            z-index: 25;
-            pointer-events: none;
+            font-size: 0.7rem; letter-spacing: .1em; text-transform: uppercase;
+            color: #3a5090; transition: color .3s;
+            z-index: 25; pointer-events: none;
+            white-space: nowrap;
         }
         #orbLabel.open   { color: #5a9fff; }
         #orbLabel.closed { color: #384070; }
@@ -262,7 +269,7 @@
 </head>
 <body>
 
-<div id="stars"></div>
+<canvas id="starsCanvas"></canvas>
 <canvas id="galaxyCanvas"></canvas>
 
 <!-- ORB — free-floating -->
@@ -276,24 +283,34 @@
 </div>
 <div id="orbLabel">Waiting…</div>
 
-<!-- UI PANEL -->
-<div class="panel">
-    <p class="header-eyebrow">Teachable Machine</p>
-    <h1>Hand Orb</h1>
-    <p class="subtitle">
-        ✋ Open palm → summon &amp; drag orb<br>
-        ✊ Closed fist → dismiss orb<br>
-        🌐 Both hands sphere → expand skeleton<br>
-        💥 Release → galaxy explosion
-    </p>
-    <button id="startButton">◎ Start Camera</button>
-    <div id="status">Add model files to <code>./my_model/</code> then click Start.</div>
+<!-- TOP BAR -->
+<div class="top-bar">
+    <div class="top-bar-brand">
+        <p class="header-eyebrow">Teachable Machine</p>
+        <h1>Hand Orb</h1>
+    </div>
+    <div class="gesture-pills">
+        <div class="gpill"><span>☝️</span> summon</div>
+        <div class="gpill"><span>✋</span> drag orb</div>
+        <div class="gpill"><span>✊</span> dismiss</div>
+        <div class="gpill"><span>🤌</span> pinch & hold → explode</div>
+    </div>
+    <div class="top-bar-right">
+        <div id="status">Click Start to begin.</div>
+        <button id="startButton">◎ Start Camera</button>
+    </div>
+</div>
+
+<!-- BOTTOM-LEFT PiP: webcam + prediction bars + hints -->
+<div class="pip-panel">
+    <div class="pip-label">📷 Camera feed</div>
     <div id="webcam-container"></div>
     <div id="label-container"></div>
     <div class="gesture-hints">
-        <div class="gh"><span>✋</span> Open palm to drag the orb</div>
-        <div class="gh"><span>✊</span> Fist to dismiss</div>
-        <div class="gh"><span>🌐</span> Fingertips touching = skeleton sphere</div>
+        <div class="gh"><span>☝️</span> 1 finger up — summon orb</div>
+        <div class="gh"><span>✋</span> Open palm — drag orb</div>
+        <div class="gh"><span>✊</span> Fist — dismiss orb</div>
+        <div class="gh"><span>🤌</span> Pinch and hold — skeleton → explode</div>
     </div>
 </div>
 
@@ -307,23 +324,43 @@
 
 <script>
 /* ══════════════════════════════════════════
-   STARS
+   STARS (Hardware accelerated canvas)
 ══════════════════════════════════════════ */
 (function(){
-    const el = document.getElementById('stars');
-    for (let i = 0; i < 130; i++) {
-        const s = document.createElement('div');
-        s.className = 'star';
-        const size = Math.random() * 1.8 + 0.3;
-        s.style.cssText = `
-            width:${size}px;height:${size}px;
-            top:${Math.random()*100}%;left:${Math.random()*100}%;
-            --d:${(Math.random()*3+2).toFixed(1)}s;
-            --min:${(Math.random()*0.08).toFixed(2)};
-            --max:${(Math.random()*0.5+0.1).toFixed(2)};
-            animation-delay:${(Math.random()*3).toFixed(1)}s;`;
-        el.appendChild(s);
+    const canvas = document.getElementById('starsCanvas');
+    const ctx = canvas.getContext('2d', {alpha: false}); // opaque background = faster
+    let W, H;
+    
+    function resize() {
+        W = canvas.width = window.innerWidth;
+        H = canvas.height = window.innerHeight;
     }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const stars = Array.from({length: 120}, () => ({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        size: Math.random() * 1.5 + 0.5,
+        minA: Math.random() * 0.08,
+        maxA: Math.random() * 0.5 + 0.1,
+        phase: Math.random() * Math.PI * 2,
+        speed: Math.random() * 0.02 + 0.005
+    }));
+
+    (function draw(){
+        // clear with solid background
+        ctx.fillStyle = '#07091a';
+        ctx.fillRect(0, 0, W, H);
+        
+        stars.forEach(s => {
+            s.phase += s.speed;
+            const a = s.minA + (s.maxA - s.minA) * (0.5 + 0.5 * Math.sin(s.phase));
+            ctx.fillStyle = `rgba(255,255,255,${a})`;
+            ctx.fillRect(s.x, s.y, s.size, s.size);
+        });
+        requestAnimationFrame(draw);
+    })();
 })();
 
 /* ══════════════════════════════════════════
@@ -341,18 +378,29 @@
         alpha: Math.random()*.6+.3,
         phase: Math.random()*Math.PI*2
     }));
-    let t=0;
+    
+    let t = 0;
+    let lastShownTime = Date.now();
+    
     (function draw(){
+        // Only run the heavy math/drawing if orb is visible, or fading out
+        if (window.orbVisible) lastShownTime = Date.now();
+        if (Date.now() - lastShownTime > 500) {
+            // throttle when hidden
+            requestAnimationFrame(draw);
+            return;
+        }
+
         ctx.clearRect(0,0,W,H);
-        t+=.025;
+        t += .025;
         pts.forEach(p=>{
-            p.angle+=p.speed;
-            const x=R+Math.cos(p.angle)*p.radius;
-            const y=R+Math.sin(p.angle)*p.radius;
-            const a=p.alpha*(.5+.5*Math.sin(t+p.phase));
+            p.angle += p.speed;
+            const x = R + Math.cos(p.angle)*p.radius;
+            const y = R + Math.sin(p.angle)*p.radius;
+            const a = p.alpha * (.5 + .5 * Math.sin(t + p.phase));
             ctx.beginPath();
             ctx.arc(x,y,p.size,0,Math.PI*2);
-            ctx.fillStyle=`rgba(180,220,255,${a})`;
+            ctx.fillStyle = `rgba(180,220,255,${a})`;
             ctx.fill();
         });
         requestAnimationFrame(draw);
